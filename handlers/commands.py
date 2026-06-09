@@ -154,15 +154,21 @@ async def cmd_create(message: Message, state: FSMContext, bot: Bot):
 
     # Try single-command mode: /create <name> <world> <coords>
     if len(parts) >= 3:
-        world = parts[1]
+        world_input = parts[1]
         coords_text = " ".join(parts[2:])
         shape_type, coords = _parse_coords(coords_text)
         if shape_type:
             worlds = await fetch_worlds()
-            world_names = [w["name"] for w in worlds] if worlds else []
-            if world in world_names:
+            # Match by internal name (underscore) or display name (colon)
+            matched_world = None
+            if worlds:
+                for w in worlds:
+                    if w["name"] == world_input or w.get("display_name", "") == world_input:
+                        matched_world = w["name"]
+                        break
+            if matched_world:
                 await state.clear()
-                await _create_from_coords(message, name, world, shape_type, coords)
+                await _create_from_coords(message, name, matched_world, shape_type, coords)
                 return
 
     # Multi-step FSM flow
