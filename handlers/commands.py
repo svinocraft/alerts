@@ -72,6 +72,7 @@ async def cmd_start(message: Message):
         "бот для відстеження хто що і де робить\n\n"
         "команди:\n"
         "/create <b>назва</b> — створити територію\n"
+        "/create <b>назва світ x1,z1 x2,z2 ...</b> — скорочена форма\n"
         "/whitelist <b>гравець</b> — додати гравця до ігнору\n"
         "/unwhitelist <b>гравець</b> — видалити з ігнору\n"
         "/list — список територій та гравців\n"
@@ -100,6 +101,41 @@ async def cmd_help(message: Message):
     await cmd_start(message)
 
 
+def _parse_coords(text: str) -> tuple[str, list | None] | tuple[None, None]:
+    """Try to parse text as coordinates. Returns (shape_type, coords) or (None, None)."""
+    parts = text.split()
+    if len(parts) == 4:
+        try:
+            x1, z1, x2, z2 = map(float, parts)
+            return "rectangle", [x1, z1, x2, z2]
+        except ValueError:
+            return None, None
+    try:
+        points = []
+        for part in parts:
+            x_str, z_str = part.split(",", 1)
+            points.append([float(x_str.strip()), float(z_str.strip())])
+        if len(points) < 3:
+            return None, None
+        return "polygon", points
+    except (ValueError, IndexError):
+        return None, None
+
+
+async def _create_from_coords(
+    message: Message, name: str, world: str, shape_type: str, coords: list,
+) -> bool:
+    """Create territory from parsed coordinates. Returns True on success."""
+    async with async_session() as session:
+        await crud.create_territory(
+            session, message.chat.id, name,
+            shape_type, json.dumps(coords),
+            world=world, region_id=None, auto_update=False,
+        )
+    await message.answer(f'\u2705 Територія <b>{name}</b> створена!')
+    return True
+
+
 @router.message(Command("create"))
 async def cmd_create(message: Message, state: FSMContext, bot: Bot):
     if not await is_admin(bot, message.chat.id, message.from_user.id if message.from_user else 0):
@@ -107,11 +143,29 @@ async def cmd_create(message: Message, state: FSMContext, bot: Bot):
         return
 
     cmd = (message.text or "").split(maxsplit=1)
-    name = cmd[1].strip() if len(cmd) > 1 else ""
-    if not name:
-        await message.answer("Вкажіть назву: /create <b>назва</b>")
+    rest = cmd[1].strip() if len(cmd) > 1 else ""
+    if not rest:
+        await message.answer("Вкажіть назву: /create <b>назва</b>\n"
+                             "Або скорочено: /create <b>назва світ x1,z1 x2,z2 ...</b>")
         return
 
+    parts = rest.split()
+    name = parts[0]
+
+    # Try single-command mode: /create <name> <world> <coords>
+    if len(parts) >= 3:
+        world = parts[1]
+        coords_text = " ".join(parts[2:])
+        shape_type, coords = _parse_coords(coords_text)
+        if shape_type:
+            worlds = await fetch_worlds()
+            world_names = [w["name"] for w in worlds] if worlds else []
+            if world in world_names:
+                await state.clear()
+                await _create_from_coords(message, name, world, shape_type, coords)
+                return
+
+    # Multi-step FSM flow
     await state.update_data(territory_name=name, chat_id=message.chat.id)
 
     worlds = await fetch_worlds()
@@ -229,6 +283,14 @@ async def on_region_selected(callback: CallbackQuery, state: FSMContext):
 @router.message(CreateTerritory.waiting_for_coordinates, F.text)
 async def handle_coordinates(message: Message, state: FSMContext):
     data = await state.get_data()
+    if "territory_name" not in data or "chat_id" not in data:
+        await state.clear()
+        await message.answer(
+            "\u26a0\ufe0f Стан створення територі\u0457 втрачено через перезапуск бота.\n"
+            "Почніть заново: /create <b>назва</b>"
+        )
+        return
+
     text = (message.text or "").strip()
 
     shape_type: str
@@ -283,6 +345,28 @@ async def handle_coordinates(message: Message, state: FSMContext):
 @router.message(CreateTerritory.waiting_for_coordinates)
 async def handle_coordinates_non_text(message: Message):
     await message.answer("Будь ласка, надішліть координати текстом.")
+
+
+# Catch text messages in creation states when user clicked wrong
+@router.message(CreateTerritory.waiting_for_world, F.text)
+@router.message(CreateTerritory.waiting_for_method, F.text)
+async def handle_unexpected_text_in_creation(message: Message, state: FSMContext):
+    await state.clear()
+    text = message.text or ""
+    # Check if this looks like coordinates (user trying to paste without clicking buttons)
+    shape_type, coords = _parse_coords(text.strip())
+    if shape_type and len(text.split()) >= 3:
+        # They sent coordinates without selecting world/method - guide them
+        await message.answer(
+            "Оберіть світ та метод введення через кнопки вище.\n"
+            "Або використайте скорочену форму:\n"
+            "/create <b>назва світ x1,z1 x2,z2 ...</b>"
+        )
+    else:
+        await message.answer(
+            "\u26a0\ufe0f Стан створення територі\u0457 втрачено.\n"
+            "Почніть заново: /create <b>назва</b>"
+        )
 
 
 @router.message(Command("whitelist"))
