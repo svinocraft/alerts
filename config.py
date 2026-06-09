@@ -1,0 +1,10 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
+DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///data.db")
+API_URL: str = "https://svin.aartzz.pp.ua/tiles"
+POLL_INTERVAL: int = 1
+AUTO_UPDATE_INTERVAL: int = 300
