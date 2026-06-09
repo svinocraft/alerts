@@ -79,9 +79,20 @@ async def cmd_start(message: Message):
         "/radius <b>назва</b> <b>радіус</b> — радіус сповіщення про близькість\n"
         "/link <b>нік</b> <b>@юзернейм|id</b> [ім'я] — прив'язати гравця\n"
         "/unlink <b>нік</b> — видалити прив'язку\n"
-        "/links — список прив'язок\n\n"
+        "/links — список прив'язок\n"
+        "/cancel — скасувати створення території\n\n"
         "<blockquote>автор бота: @migor1103 <i>(всі питання до нього)</i></blockquote>"
     )
+
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        await message.answer("Немає активних дій для скасування.")
+        return
+    await state.clear()
+    await message.answer("✅ Створення території скасовано.")
 
 
 @router.message(Command("help"))
