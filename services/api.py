@@ -57,8 +57,13 @@ async def fetch_worldguard_regions(world: str) -> list[dict[str, str]] | None:
                             pts = m.get("points", [])
                             if mtype == "rectangle" and len(pts) >= 2:
                                 coords = [pts[0]["x"], pts[0]["z"], pts[1]["x"], pts[1]["z"]]
-                            elif mtype == "polygon" and len(pts) >= 3:
-                                coords = [[p["x"], p["z"]] for p in pts]
+                            elif mtype == "polygon":
+                                # squaremap wraps polygon points in extra array: [[p1, p2, ...]]
+                                poly_pts = pts[0] if pts and isinstance(pts[0], list) else pts
+                                if len(poly_pts) >= 3:
+                                    coords = [[p["x"], p["z"]] for p in poly_pts]
+                                else:
+                                    coords = None
                             else:
                                 coords = None
                             if coords:
