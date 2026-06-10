@@ -27,11 +27,12 @@ async def error_handler(event: ErrorEvent):
 
     if chat_id:
         try:
+            from aiogram import Bot
             bot = Bot.get_current(raise_error=False)
             if bot:
                 await bot.send_message(
                     chat_id,
-                    "\u26a0\ufe0f Сталася помилка. Спробуйте /create заново або /cancel щоб скинути стан.",
+                    "\u26a0\ufe0f Сталася помилка. Спробуйте /cancel щоб скинути стан.",
                 )
         except Exception:
-            logger.exception("Failed to send error notification")
+            logger.debug("Could not send error notification (Bot.get_current unavailable)")

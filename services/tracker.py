@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 _api_errors = 0
 _cached_players: list[dict[str, str | float | int]] | None = None
 _name_casing: dict[str, str] = {}
+_monitor_seen_state: dict[str, dict[str, bool]] = defaultdict(dict)
 
 
 def _build_link_map(links: Sequence[PlayerLink]) -> dict[str, PlayerLink]:
@@ -45,10 +46,27 @@ def get_name_casing() -> dict[str, str]:
     return dict(_name_casing)
 
 
+async def _should_ignore(
+    session, chat_id: int, player_lower: str, territory_id: int,
+) -> bool:
+    """Check if a player should NOT trigger alerts for this territory."""
+    global_enabled = await crud.get_whitelist_config(session, chat_id, territory_id=None)
+    if global_enabled:
+        global_list = await crud.get_whitelisted_players(session, chat_id, territory_id=None)
+        if player_lower in global_list:
+            return True
+    ter_enabled = await crud.get_whitelist_config(session, chat_id, territory_id=territory_id)
+    if ter_enabled:
+        ter_list = await crud.get_whitelisted_players(session, chat_id, territory_id=territory_id)
+        if player_lower in ter_list:
+            return True
+    return False
+
+
 async def process_players(bot: Bot) -> None:
     global _api_errors, _cached_players
-
     global _name_casing
+    global _monitor_seen_state
 
     players = await fetch_players()
     if players is not None:
@@ -77,9 +95,6 @@ async def process_players(bot: Bot) -> None:
             by_chat[t.chat_id].append(t)
 
         for chat_id, chat_territories in by_chat.items():
-            whitelist_entries = await crud.get_whitelist(session, chat_id)
-            whitelisted = {w.player_name for w in whitelist_entries}
-
             current_sessions = await crud.get_active_sessions(session, chat_id)
             prev_by_territory: dict[int, set[str]] = defaultdict(set)
             for s in current_sessions:
@@ -112,47 +127,57 @@ async def process_players(bot: Bot) -> None:
                 exited = prev_inside - inside_now
 
                 for player_name in entered:
+                    now = crud._now()
                     await crud.create_session(
                         session, chat_id, player_name, territory.id
+                    )
+                    await crud.create_session_history(
+                        session, chat_id, player_name, territory.id,
+                        entered_at=now,
                     )
                     await crud.upsert_tracked_player(session, chat_id, player_name)
                     await crud.clear_proximity_state(
                         session, chat_id, player_name, territory.id
                     )
-                    if player_name not in whitelisted:
-                        display = _fmt_name(player_name, name_map, link_map)
-                        try:
-                            await bot.send_message(
-                                chat_id,
-                                "\u26a0\ufe0f " + display
-                                + ' \u0437\u0430\u0439\u0448\u043e\u0432 \u043d\u0430'
-                                + ' \u0442\u0435\u0440\u0438\u0442\u043e\u0440\u0456\u044e'
-                                + ' "' + territory.name + '"',
-                            )
-                        except Exception:
-                            logger.exception(
-                                "Failed to send enter notification to %s", chat_id
-                            )
+                    if not await _should_ignore(session, chat_id, player_name, territory.id):
+                        ac = await crud.get_alert_config(session, chat_id)
+                        if ac.enter_enabled:
+                            display = _fmt_name(player_name, name_map, link_map)
+                            try:
+                                msg = ac.enter_template.format(
+                                    player=display,
+                                    territory=territory.name,
+                                    world=territory.world,
+                                )
+                                await bot.send_message(chat_id, msg)
+                            except Exception:
+                                logger.exception(
+                                    "Failed to send enter notification to %s", chat_id
+                                )
 
                 for player_name in exited:
                     await crud.delete_session(
                         session, chat_id, player_name, territory.id
                     )
+                    await crud.finish_session_history(
+                        session, chat_id, player_name, territory.id
+                    )
                     await crud.upsert_tracked_player(session, chat_id, player_name)
                     display = _fmt_name(player_name, global_names, link_map)
-                    if player_name not in whitelisted:
-                        try:
-                            await bot.send_message(
-                                chat_id,
-                                "\U0001f7e0 " + display
-                                + ' \u0432\u0438\u0439\u0448\u043e\u0432'
-                                + ' \u0437 \u0442\u0435\u0440\u0438\u0442\u043e\u0440\u0456\u0457'
-                                + ' "' + territory.name + '"',
-                            )
-                        except Exception:
-                            logger.exception(
-                                "Failed to send exit notification to %s", chat_id
-                            )
+                    if not await _should_ignore(session, chat_id, player_name, territory.id):
+                        ac = await crud.get_alert_config(session, chat_id)
+                        if ac.exit_enabled:
+                            try:
+                                msg = ac.exit_template.format(
+                                    player=display,
+                                    territory=territory.name,
+                                    world=territory.world,
+                                )
+                                await bot.send_message(chat_id, msg)
+                            except Exception:
+                                logger.exception(
+                                    "Failed to send exit notification to %s", chat_id
+                                )
                     for p in players:
                         p_lower = str(p["name"]).lower()
                         if p_lower == player_name:
@@ -204,26 +229,80 @@ async def process_players(bot: Bot) -> None:
                     await crud.set_proximity_state(
                         session, chat_id, player_name, territory.id
                     )
-                    if player_name not in whitelisted:
-                        display = _fmt_name(player_name, near_name_map, link_map)
-                        try:
-                            await bot.send_message(
-                                chat_id,
-                                "\U0001f7e1 " + display
-                                + ' \u0431\u043b\u0443\u043a\u0430\u0454 \u043f\u043e\u0431\u043b\u0438\u0437\u0443'
-                                + ' \u0442\u0435\u0440\u0438\u0442\u043e\u0440\u0456\u0457'
-                                + ' "' + territory.name + '"',
-                            )
-                        except Exception:
-                            logger.exception(
-                                "Failed to send proximity notification to %s", chat_id
-                            )
+                    if not await _should_ignore(session, chat_id, player_name, territory.id):
+                        ac = await crud.get_alert_config(session, chat_id)
+                        if ac.proximity_enabled:
+                            display = _fmt_name(player_name, near_name_map, link_map)
+                            try:
+                                msg = ac.proximity_template.format(
+                                    player=display,
+                                    territory=territory.name,
+                                    world=territory.world,
+                                )
+                                await bot.send_message(chat_id, msg)
+                            except Exception:
+                                logger.exception(
+                                    "Failed to send proximity notification to %s", chat_id
+                                )
 
                 no_longer_near = prev_near - near_now
                 for player_name in no_longer_near:
                     await crud.clear_proximity_state(
                         session, chat_id, player_name, territory.id
                     )
+
+        all_monitors = await crud.get_all_monitors(session)
+        monitors_by_chat: dict[int, set[str]] = defaultdict(set)
+        for m in all_monitors:
+            monitors_by_chat[m.chat_id].add(m.player_name)
+
+        current_players_lower = {str(p["name"]).lower() for p in players}
+        player_world_map = {str(p["name"]).lower(): str(p.get("world", "?")) for p in players}
+
+        for chat_id, monitored_set in monitors_by_chat.items():
+            prev_seen = _monitor_seen_state.get(chat_id, {})
+            for player_lower in monitored_set:
+                is_online = player_lower in current_players_lower
+                was_online = prev_seen.get(player_lower, False)
+
+                if is_online and not was_online:
+                    ac = await crud.get_alert_config(session, chat_id)
+                    if ac.monitor_join_enabled:
+                        world = player_world_map.get(player_lower, "?")
+                        name_map_local = {player_lower: str(next(
+                            (p["name"] for p in players if str(p["name"]).lower() == player_lower),
+                            player_lower,
+                        ))}
+                        display = _fmt_name(player_lower, name_map_local, link_map)
+                        try:
+                            msg = ac.monitor_join_template.format(
+                                player=display,
+                                world=world,
+                                territory="?",
+                            )
+                            await bot.send_message(chat_id, msg)
+                        except Exception:
+                            logger.exception("Failed to send monitor join to %s", chat_id)
+
+                elif not is_online and was_online:
+                    ac = await crud.get_alert_config(session, chat_id)
+                    if ac.monitor_leave_enabled:
+                        name_map_offline = {player_lower: player_lower}
+                        display = _fmt_name(player_lower, name_map_offline, link_map)
+                        try:
+                            msg = ac.monitor_leave_template.format(
+                                player=display,
+                                world="?",
+                                territory="?",
+                            )
+                            await bot.send_message(chat_id, msg)
+                        except Exception:
+                            logger.exception("Failed to send monitor leave to %s", chat_id)
+
+            _monitor_seen_state[chat_id] = {
+                p: (p in current_players_lower)
+                for p in monitored_set
+            }
 
 
 async def auto_update_loop() -> None:
