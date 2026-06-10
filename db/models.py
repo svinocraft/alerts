@@ -1,11 +1,12 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    from services.ntp_time import ntp_now
+    return ntp_now()
 
 
 class Base(DeclarativeBase):

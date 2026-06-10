@@ -8,6 +8,7 @@ from config import BOT_TOKEN
 from db.database import init_db
 from handlers.commands import router as commands_router
 from handlers.errors import router as errors_router
+from services.ntp_time import sync_ntp
 from services.tracker import tracker_loop
 
 logging.basicConfig(
@@ -24,6 +25,9 @@ async def main():
 
     await init_db()
     logger.info("Database initialized")
+
+    sync_ntp()
+    logger.info("NTP time synchronized")
 
     bot = Bot(
         token=BOT_TOKEN,

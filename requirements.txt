@@ -3,3 +3,4 @@ aiohttp~=3.11
 sqlalchemy[asyncio]~=2.0
 aiosqlite~=0.21
 python-dotenv~=1.1
+ntplib~=0.4

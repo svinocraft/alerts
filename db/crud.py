@@ -21,7 +21,8 @@ from db.models import (
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    from services.ntp_time import ntp_now
+    return ntp_now()
 
 
 # ── Territory ──────────────────────────────────────────────────────────
