@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _api_errors = 0
 _cached_players: list[dict[str, str | float | int]] | None = None
+_name_casing: dict[str, str] = {}
 
 
 def _build_link_map(links: Sequence[PlayerLink]) -> dict[str, PlayerLink]:
@@ -40,13 +41,22 @@ def _fmt_name(
     return original
 
 
+def get_name_casing() -> dict[str, str]:
+    return dict(_name_casing)
+
+
 async def process_players(bot: Bot) -> None:
     global _api_errors, _cached_players
+
+    global _name_casing
 
     players = await fetch_players()
     if players is not None:
         _api_errors = 0
         _cached_players = players
+        for p in players:
+            original = str(p["name"])
+            _name_casing[original.lower()] = original
     else:
         _api_errors += 1
         if _cached_players is None:

@@ -13,6 +13,7 @@ from db import crud
 from db.database import async_session
 from db.models import PlayerLink, PlayerSession
 from services.api import fetch_players, fetch_worldguard_regions, fetch_worlds
+from services.timezone import format_dt, normalize_tz_input, parse_timezone, DEFAULT_TZ
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -61,7 +62,6 @@ def _fmt_name(
 
 class CreateTerritory(StatesGroup):
     waiting_for_world = State()
-    waiting_for_method = State()
     waiting_for_coordinates = State()
     waiting_for_region_selection = State()
 
@@ -81,6 +81,8 @@ async def cmd_start(message: Message):
         "/link <b>нік</b> <b>@юзернейм|id</b> [ім'я] — прив'язати гравця\n"
         "/unlink <b>нік</b> — видалити прив'язку\n"
         "/links — список прив'язок\n"
+        "/time — переглянути часовий пояс\n"
+        "/time <b>gmt+2</b> — змінити часовий пояс\n"
         "/cancel — скасувати створення території\n\n"
         "<blockquote>автор бота: @migor1103 <i>(всі питання до нього)</i></blockquote>"
     )
@@ -201,43 +203,12 @@ async def on_world_selected(callback: CallbackQuery, state: FSMContext):
     if not isinstance(callback.message, Message):
         return
 
-    builder = InlineKeyboardBuilder()
-    builder.button(text="\u270f\ufe0f Ввести вручну", callback_data="method:manual")
-    builder.button(text="\U0001f4e1 Імпорт з WorldGuard", callback_data="method:wg")
-    builder.adjust(1)
-
-    await state.set_state(CreateTerritory.waiting_for_method)
-    await callback.message.edit_text(
-        f"Світ: <b>{world}</b>\nЯк створити територію?",
-        reply_markup=builder.as_markup(),
-    )
-
-
-@router.callback_query(CreateTerritory.waiting_for_method, F.data == "method:manual")
-async def on_method_manual(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    if not isinstance(callback.message, Message):
-        return
-    await state.set_state(CreateTerritory.waiting_for_coordinates)
-    await callback.message.edit_text(
-        "Надішліть координати одним з форматів:\n"
-        "\u2022 <b>Прямокутник</b>: <code>x1 z1 x2 z2</code>\n"
-        "\u2022 <b>Багатокутник</b>: <code>x1,z1 x2,z2 x3,z3 ...</code>"
-    )
-
-
-@router.callback_query(CreateTerritory.waiting_for_method, F.data == "method:wg")
-async def on_method_wg(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    world = data.get("world", "minecraft_overworld")
-    await callback.answer()
-    if not isinstance(callback.message, Message):
-        return
-
     regions = await fetch_worldguard_regions(world)
     if not regions:
         await callback.message.edit_text(
-            "\u26a0\ufe0f Не знайдено регіонів WorldGuard у цьому світі."
+            "\u26a0\ufe0f Не знайдено регіонів WorldGuard у цьому світі.\n"
+            "Використайте скорочену форму:\n"
+            "<code>/create назва світ x1,z1 x2,z2 ...</code>"
         )
         await state.clear()
         return
@@ -250,7 +221,8 @@ async def on_method_wg(callback: CallbackQuery, state: FSMContext):
     await state.update_data(wg_regions=regions)
     await state.set_state(CreateTerritory.waiting_for_region_selection)
     await callback.message.edit_text(
-        "Оберіть регіон:", reply_markup=builder.as_markup()
+        f"Світ: <b>{world}</b>\nОберіть регіон:",
+        reply_markup=builder.as_markup(),
     )
 
 
@@ -355,18 +327,15 @@ async def handle_coordinates_non_text(message: Message):
 
 # Catch text messages in creation states when user clicked wrong
 @router.message(CreateTerritory.waiting_for_world, F.text)
-@router.message(CreateTerritory.waiting_for_method, F.text)
 async def handle_unexpected_text_in_creation(message: Message, state: FSMContext):
     await state.clear()
     text = message.text or ""
-    # Check if this looks like coordinates (user trying to paste without clicking buttons)
     shape_type, coords = _parse_coords(text.strip())
     if shape_type and len(text.split()) >= 3:
-        # They sent coordinates without selecting world/method - guide them
         await message.answer(
-            "Оберіть світ та метод введення через кнопки вище.\n"
+            "Оберіть світ через кнопки вище.\n"
             "Або використайте скорочену форму:\n"
-            "/create <b>назва світ x1,z1 x2,z2 ...</b>"
+            "<code>/create назва світ x1,z1 x2,z2 ...</code>"
         )
     else:
         await message.answer(
@@ -440,6 +409,8 @@ async def cmd_list(message: Message):
         whitelist_entries = await crud.get_whitelist(session, chat_id)
         tracked = await crud.get_tracked_players(session, chat_id)
         links = await crud.get_all_player_links(session)
+        chat_config = await crud.get_chat_config(session, chat_id)
+    tz_name = chat_config.timezone
 
     link_map = {l.minecraft_name: l for l in links}
 
@@ -449,6 +420,9 @@ async def cmd_list(message: Message):
         for p in players:
             original = str(p["name"])
             name_map[original.lower()] = original
+    from services.tracker import get_name_casing
+    for lower, original in get_name_casing().items():
+        name_map.setdefault(lower, original)
 
     if not territories and not whitelist_entries and not tracked:
         await message.answer("Немає даних. Створіть територію: /create <b>назва</b>")
@@ -469,7 +443,7 @@ async def cmd_list(message: Message):
     for tid, ss in session_by_tid.items():
         tname = territory_names.get(tid, "???")
         for s in ss:
-            ts = s.entered_at.strftime("%Y-%m-%d %H:%M")
+            ts = format_dt(s.entered_at, tz_name)
             display = _fmt_name(s.player_name, link_map, name_map)
             territory_lines.append(
                 f"- {display} <i>[\u0437 {ts}]</i>  <b>{tname}</b>"
@@ -489,13 +463,13 @@ async def cmd_list(message: Message):
         if pn in on_territory_names:
             for s in sessions:
                 if s.player_name == pn:
-                    ts = s.entered_at.strftime("%Y-%m-%d %H:%M")
+                    ts = format_dt(s.entered_at, tz_name)
                     whitelist_lines.append(f"- {display} <i>(\u0437 {ts})</i>")
                     break
         else:
             tp = tracked_lookup.get(pn)
             if tp:
-                ts = tp.last_seen.strftime("%Y-%m-%d %H:%M")
+                ts = format_dt(tp.last_seen, tz_name)
                 whitelist_lines.append(f"- {display} <i>(\u0431\u0443\u0432 {ts})</i>")
             else:
                 whitelist_lines.append(f"- {display}")
@@ -514,11 +488,11 @@ async def cmd_list(message: Message):
         if pn in on_territory_names:
             for s in sessions:
                 if s.player_name == pn:
-                    ts = s.entered_at.strftime("%Y-%m-%d %H:%M")
+                    ts = format_dt(s.entered_at, tz_name)
                     unique_lines.append(f"- {display} <i>(\u0437 {ts})</i>")
                     break
         else:
-            ts = tp.last_seen.strftime("%Y-%m-%d %H:%M")
+            ts = format_dt(tp.last_seen, tz_name)
             unique_lines.append(f"- {display} <i>(\u0431\u0443\u0432 {ts})</i>")
     s = _build_section(
         unique_lines,
@@ -658,5 +632,50 @@ async def cmd_links(message: Message):
 
     await message.answer(
         _build_section(lines, "Прив'язки гравців:")
-        or "Немає прив'язок гравців."
+        or "Немає прив'язок гравців.",
+    )
+
+
+@router.message(Command("time"))
+async def cmd_time(message: Message, command: CommandObject):
+    args = (command.args or "").strip()
+
+    async with async_session() as session:
+        config = await crud.get_chat_config(session, message.chat.id)
+
+        if not args:
+            tz = config.timezone
+            try:
+                offset = datetime.now(parse_timezone(tz)).strftime("%z")
+                tz_display = f"GMT{offset[:3]}:{offset[3:]}" if offset else "UTC"
+            except ValueError:
+                tz_display = tz
+            await message.answer(
+                f"\U0001f550 Поточний часовий пояс: <b>{tz_display}</b> (<code>{tz}</code>)\n"
+                "Змінити: /time <b>назва_таймзони</b>\n"
+                "Наприклад: <code>/time Europe/Kyiv</code> або <code>/time gmt+2</code>"
+            )
+            return
+
+        tz_input = normalize_tz_input(args)
+        try:
+            parse_timezone(tz_input)
+        except ValueError:
+            await message.answer(
+                f"\u274c Невідомий часовий пояс: <code>{args}</code>\n"
+                "Використовуйте IANA назву (наприклад, <code>Europe/Kyiv</code>) "
+                "або GMT зміщення (наприклад, <code>gmt+2</code>, <code>gmt-5</code>)."
+            )
+            return
+
+        await crud.update_chat_timezone(session, message.chat.id, tz_input)
+
+    try:
+        offset = datetime.now(parse_timezone(tz_input)).strftime("%z")
+        tz_display = f"GMT{offset[:3]}:{offset[3:]}" if offset else "UTC"
+    except ValueError:
+        tz_display = tz_input
+
+    await message.answer(
+        f"\u2705 Часовий пояс змінено на <b>{tz_display}</b> (<code>{tz_input}</code>)"
     )
