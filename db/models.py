@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -33,10 +33,26 @@ class WhitelistEntry(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     chat_id: Mapped[int] = mapped_column(nullable=False, index=True)
+    territory_id: Mapped[int | None] = mapped_column(ForeignKey("territories.id", ondelete="CASCADE"), nullable=True)
     player_name: Mapped[str] = mapped_column(String(100), nullable=False)
     added_at: Mapped[datetime] = mapped_column(default=_now)
 
-    __table_args__ = (UniqueConstraint("chat_id", "player_name", name="uq_whitelist"),)
+    __table_args__ = (
+        UniqueConstraint("chat_id", "territory_id", "player_name", name="uq_whitelist"),
+    )
+
+
+class WhitelistConfig(Base):
+    __tablename__ = "whitelist_configs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(nullable=False, index=True)
+    territory_id: Mapped[int | None] = mapped_column(ForeignKey("territories.id", ondelete="CASCADE"), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    __table_args__ = (
+        UniqueConstraint("chat_id", "territory_id", name="uq_whitelist_config"),
+    )
 
 
 class PlayerSession(Base):
@@ -47,6 +63,18 @@ class PlayerSession(Base):
     player_name: Mapped[str] = mapped_column(String(100), nullable=False)
     territory_id: Mapped[int] = mapped_column(ForeignKey("territories.id"), nullable=False)
     entered_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class PlayerSessionHistory(Base):
+    __tablename__ = "player_session_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(nullable=False, index=True)
+    player_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    territory_id: Mapped[int] = mapped_column(ForeignKey("territories.id"), nullable=False)
+    entered_at: Mapped[datetime] = mapped_column(nullable=False)
+    exited_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(nullable=True)
 
 
 class TrackedPlayer(Base):
@@ -90,3 +118,34 @@ class ProximityState(Base):
     __table_args__ = (
         UniqueConstraint("chat_id", "player_name", "territory_id", name="uq_proximity"),
     )
+
+
+class AlertConfig(Base):
+    __tablename__ = "alert_configs"
+
+    chat_id: Mapped[int] = mapped_column(primary_key=True)
+    enter_template: Mapped[str] = mapped_column(Text, nullable=False,
+        default="⚠️ {player} зайшов на територію {territory}")
+    enter_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    exit_template: Mapped[str] = mapped_column(Text, nullable=False,
+        default="🟠 {player} вийшов з території {territory}")
+    exit_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    proximity_template: Mapped[str] = mapped_column(Text, nullable=False,
+        default="🟡 {player} блукає поблизу території {territory}")
+    proximity_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    monitor_join_template: Mapped[str] = mapped_column(Text, nullable=False,
+        default="🟢 {player} зайшов на сервер ({world})")
+    monitor_join_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    monitor_leave_template: Mapped[str] = mapped_column(Text, nullable=False,
+        default="🔴 {player} вийшов з сервера")
+    monitor_leave_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class MonitorConfig(Base):
+    __tablename__ = "monitor_configs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(nullable=False, index=True)
+    player_name: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    __table_args__ = (UniqueConstraint("chat_id", "player_name", name="uq_monitor"),)
