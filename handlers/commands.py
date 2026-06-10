@@ -1160,3 +1160,10 @@ async def cmd_alert(message: Message, bot: Bot, command: CommandObject):
         )
 
     await message.answer(f'\u2705 Шаблон для події "{field}" оновлено.')
+
+
+@router.message(F.text.startswith("/"))
+async def handle_unknown_command(message: Message):
+    await message.answer(
+        "\u2757 Невірна команда. /start щоб побачити список всіх команд."
+    )
