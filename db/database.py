@@ -4,7 +4,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from config import DATABASE_URL
-from db.models import Base
+from db.models import Base, ChatConfig
 
 logger = logging.getLogger(__name__)
 

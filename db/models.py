@@ -71,6 +71,13 @@ class PlayerLink(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class ChatConfig(Base):
+    __tablename__ = "chat_configs"
+
+    chat_id: Mapped[int] = mapped_column(primary_key=True)
+    timezone: Mapped[str] = mapped_column(String(50), nullable=False, default="Europe/Kyiv")
+
+
 class ProximityState(Base):
     __tablename__ = "proximity_states"
 

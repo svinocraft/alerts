@@ -12,6 +12,7 @@ from db.models import (
     TrackedPlayer,
     PlayerLink,
     ProximityState,
+    ChatConfig,
 )
 
 
@@ -290,6 +291,29 @@ async def get_proximity_state(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_chat_config(
+    session: AsyncSession, chat_id: int
+) -> ChatConfig:
+    result = await session.execute(
+        select(ChatConfig).where(ChatConfig.chat_id == chat_id)
+    )
+    config = result.scalar_one_or_none()
+    if not config:
+        config = ChatConfig(chat_id=chat_id, timezone="Europe/Kyiv")
+        session.add(config)
+        await session.commit()
+    return config
+
+
+async def update_chat_timezone(
+    session: AsyncSession, chat_id: int, timezone: str
+) -> ChatConfig:
+    config = await get_chat_config(session, chat_id)
+    config.timezone = timezone
+    await session.commit()
+    return config
 
 
 async def get_proximity_states_for_territory(
