@@ -428,14 +428,15 @@ async def on_world_selected(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             "\u26a0\ufe0f Не знайдено регіонів WorldGuard у цьому світі.\n"
             "Використайте скорочену форму:\n"
-            "<code>/ter create назва світ x1,z1 x2,z2 ...</code>"
+            "<code>/ter create назва світ x1,z1 x2,z2 ...</code>",
+            reply_markup=None,
         )
         await state.clear()
         return
 
     builder = InlineKeyboardBuilder()
-    for r in regions:
-        builder.button(text=r["name"], callback_data=f"region:{r['name']}")
+    for i, r in enumerate(regions):
+        builder.button(text=r["name"], callback_data=f"region:{i}")
     builder.adjust(1)
 
     await state.update_data(wg_regions=regions)
@@ -448,20 +449,25 @@ async def on_world_selected(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(CreateTerritory.waiting_for_region_selection, F.data.startswith("region:"))
 async def on_region_selected(callback: CallbackQuery, state: FSMContext):
-    region_name = (callback.data or "").split(":", 1)[1]
+    try:
+        idx = int((callback.data or "").split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Помилка: невірний індекс регіону")
+        return
+
     data = await state.get_data()
     regions = data.get("wg_regions", [])
-    matched = next((r for r in regions if r["name"] == region_name), None)
-    if not matched:
+    if idx < 0 or idx >= len(regions):
         await callback.answer("Помилка: регіон не знайдено")
         return
+    matched = regions[idx]
 
     async with async_session() as session:
         await crud.create_territory(
             session, data["chat_id"], data["territory_name"],
             matched["shape_type"], matched["coordinates"],
             world=data.get("world", "minecraft_overworld"),
-            region_id=region_name, auto_update=True,
+            region_id=matched["name"], auto_update=True,
         )
 
     await state.clear()
@@ -470,7 +476,7 @@ async def on_region_selected(callback: CallbackQuery, state: FSMContext):
         return
     await callback.message.edit_text(
         f'\u2705 Територія <b>{data["territory_name"]}</b> створена '
-        f'(WorldGuard: {region_name}, автооновлення увімкнено).'
+        f'(WorldGuard: {matched["name"]}, автооновлення увімкнено).'
     )
 
 
