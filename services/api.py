@@ -34,10 +34,12 @@ async def fetch_worlds() -> list[dict[str, str]] | None:
 
 
 def parse_wg_region_name(popup: str) -> str:
-    match = re.search(r"<span[^>]*>(.*?)</span>", popup)
-    if match:
-        return match.group(1).strip()
-    return popup
+    # Split by <br> first, take the first part
+    lines = re.split(r"<br\s*/?>", popup, flags=re.IGNORECASE)
+    first_part = lines[0] if lines else popup
+    # Strip all HTML tags from the first part only
+    name = re.sub(r"<[^>]+>", "", first_part).strip()
+    return name
 
 
 async def fetch_worldguard_regions(world: str) -> list[dict[str, str]] | None:
@@ -50,9 +52,15 @@ async def fetch_worldguard_regions(world: str) -> list[dict[str, str]] | None:
                     for group in data:
                         if group.get("id") != "worldguard":
                             continue
-                        result = []
+                        seen: dict[str, dict] = {}
                         for m in group.get("markers", []):
                             name = parse_wg_region_name(m.get("popup", ""))
+                            if not name:
+                                continue
+                            # Deduplicate: if same region appears as both rectangle and polygon,
+                            # keep only the first occurrence (prefer rectangle for overlap)
+                            if name in seen:
+                                continue
                             mtype = m.get("type", "rectangle")
                             pts = m.get("points", [])
                             if mtype == "rectangle" and len(pts) >= 2:
@@ -67,12 +75,12 @@ async def fetch_worldguard_regions(world: str) -> list[dict[str, str]] | None:
                             else:
                                 coords = None
                             if coords:
-                                result.append({
+                                seen[name] = {
                                     "name": name,
                                     "shape_type": "rectangle" if mtype == "rectangle" else "polygon",
                                     "coordinates": json.dumps(coords),
-                                })
-                        return result
+                                }
+                        return list(seen.values())
     except Exception:
         return None
     return None

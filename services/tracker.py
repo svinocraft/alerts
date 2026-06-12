@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections.abc import Sequence
 from collections import defaultdict
 
@@ -321,14 +322,25 @@ async def auto_update_loop() -> None:
                         continue
                     region_map = {r["name"]: r for r in regions}
                     for t in wg_territories:
-                        if t.region_id and t.region_id in region_map:
-                            r = region_map[t.region_id]
-                            await crud.update_territory_coords(
-                                session, t.id, r["coordinates"]
-                            )
-                            logger.info(
-                                "Auto-updated territory %s (%s)", t.name, world
-                            )
+                        if not t.region_id:
+                            continue
+                        # Try exact match first; fallback to stripped (for old territories
+                        # created before HTML tags were cleaned from WG region names)
+                        rid = t.region_id
+                        if rid in region_map:
+                            r = region_map[rid]
+                        else:
+                            stripped = re.sub(r"<[^>]+>", "", rid).strip()
+                            if stripped in region_map:
+                                r = region_map[stripped]
+                            else:
+                                continue
+                        await crud.update_territory_coords(
+                            session, t.id, r["coordinates"]
+                        )
+                        logger.info(
+                            "Auto-updated territory %s (%s)", t.name, world
+                        )
         except Exception:
             logger.exception("Auto-update cycle error")
         await asyncio.sleep(AUTO_UPDATE_INTERVAL)
